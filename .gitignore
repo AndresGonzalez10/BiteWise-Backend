@@ -1,0 +1,19 @@
+# Dependencias (Nunca se suben porque son muy pesadas)
+node_modules/
+
+# Variables de entorno (¡MUY IMPORTANTE! Contiene tus contraseñas de BD)
+.env
+
+# Archivos de log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Carpetas de compilación o temporales
+dist/
+build/
+.cache/
