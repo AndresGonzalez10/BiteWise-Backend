@@ -2,16 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 require('dotenv').config();
-require('./db.js');
+require('./src/config/db'); 
 
 const app = express();
+const inventoryRoutes = require('./src/routes/inventoryRoutes');
 
 app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json());
-app.get('/', (req, res) => {
-  res.send('Bitewise API is running... 🚀');
-});
+
+app.use('/api/inventory', inventoryRoutes);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
