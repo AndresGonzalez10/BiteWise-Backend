@@ -28,3 +28,57 @@ export const getAllRecipes = async (_req: Request, res: Response) => {
     res.status(500).json({ error: 'Error en el servidor' });
   }
 };
+
+interface IngredientForRecipe {
+  ingredient_id: number;
+  required_quantity: number;
+}
+
+interface CreateRecipeBody {
+  title: string;
+  instructions: string;
+  image_url?: string;
+  author_id: string; 
+  ingredients: IngredientForRecipe[]; 
+}
+
+export const createRecipe = async (req: Request<{}, {}, CreateRecipeBody>, res: Response) => {
+  const { title, instructions, image_url, author_id, ingredients } = req.body;
+  
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const recipeQuery = `
+      INSERT INTO recipes (title, instructions, image_url, is_custom, author_id)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id;
+    `;
+    const recipeValues = [title, instructions, image_url || null, true, author_id];
+    const recipeResult = await client.query(recipeQuery, recipeValues);
+    
+    const newRecipeId = recipeResult.rows[0].id;
+    if (ingredients && ingredients.length > 0) {
+      const ingredientQuery = `
+        INSERT INTO recipe_ingredients (recipe_id, ingredient_id, required_quantity)
+        VALUES ($1, $2, $3);
+      `;
+      for (const ing of ingredients) {
+        await client.query(ingredientQuery, [newRecipeId, ing.ingredient_id, ing.required_quantity]);
+      }
+    }
+    await client.query('COMMIT');
+    
+    res.status(201).json({ 
+      message: 'Receta creada exitosamente', 
+      recipeId: newRecipeId 
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al crear la receta:', error);
+    res.status(500).json({ error: 'Error al procesar la solicitud' });
+  } finally {
+    client.release();
+  }
+};

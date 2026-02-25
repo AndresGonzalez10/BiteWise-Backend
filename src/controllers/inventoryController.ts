@@ -3,7 +3,7 @@ import pool from '../config/db';
 
 export const getInventory = async (_req: Request, res: Response) => {
   try {
-    const query = 'SELECT * FROM ingredients';
+    const query = 'SELECT * FROM users';
     const result = await pool.query(query);
     res.json(result.rows);
   } catch (error) {
