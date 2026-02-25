@@ -1,9 +1,9 @@
-const pool = require('../config/db');
+import { Request, Response } from 'express';
+import pool from '../config/db';
 
-const getInventory = async (req, res) => {
+export const getInventory = async (_req: Request, res: Response) => {
   try {
-    const query = `SELECT * FROM ingredients`;
-    
+    const query = 'SELECT * FROM ingredients';
     const result = await pool.query(query);
     res.json(result.rows);
   } catch (error) {
@@ -12,7 +12,13 @@ const getInventory = async (req, res) => {
   }
 };
 
-const addInventoryItem = async (req, res) => {
+interface InventoryBody {
+  user_id: string;
+  ingredient_id: number;
+  current_quantity: number;
+}
+
+export const addInventoryItem = async (req: Request<{}, {}, InventoryBody>, res: Response) => {
   const { user_id, ingredient_id, current_quantity } = req.body;
   try {
     const query = `
@@ -31,9 +37,4 @@ const addInventoryItem = async (req, res) => {
     console.error('Error al añadir al inventario:', error);
     res.status(500).json({ error: 'Error al procesar la solicitud' });
   }
-};
-
-module.exports = {
-  getInventory,
-  addInventoryItem
 };
