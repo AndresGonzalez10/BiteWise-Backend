@@ -152,3 +152,45 @@ export const getMatchingRecipes = async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Error al procesar la solicitud' });
   }
 };
+interface CookRecipeBody {
+  user_id: string;
+  recipe_id: number;
+}
+
+export const cookRecipe = async (req: Request<{}, {}, CookRecipeBody>, res: Response) => {
+  const { user_id, recipe_id } = req.body;
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const recipeQuery = `SELECT ingredient_id, required_quantity FROM recipe_ingredients WHERE recipe_id = $1`;
+    const { rows: ingredientsNeeded } = await client.query(recipeQuery, [recipe_id]);
+
+    if (ingredientsNeeded.length === 0) {
+      throw new Error('La receta no tiene ingredientes o no existe.');
+    }
+
+    for (const item of ingredientsNeeded) {
+      const updateQuery = `
+        UPDATE inventory 
+        SET current_quantity = current_quantity - $1, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $2 AND ingredient_id = $3 AND current_quantity >= $1
+        RETURNING *;
+      `;
+      const updateResult = await client.query(updateQuery, [item.required_quantity, user_id, item.ingredient_id]);
+
+      if (updateResult.rowCount === 0) {
+        throw new Error(`No tienes suficiente cantidad del ingrediente ID: ${item.ingredient_id} para preparar esta receta.`);
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ message: '¡Receta cocinada con éxito! Tu inventario ha sido actualizado.' });
+
+  } catch (error: any) {
+    await client.query('ROLLBACK');
+    console.error('Error al cocinar la receta:', error.message);
+    res.status(400).json({ error: error.message || 'Error al procesar la solicitud' });
+  } finally {
+    client.release();
+  }
+};
