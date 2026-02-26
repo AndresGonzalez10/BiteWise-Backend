@@ -82,3 +82,73 @@ export const createRecipe = async (req: Request<{}, {}, CreateRecipeBody>, res: 
     client.release();
   }
 };
+export const getMatchingRecipes = async (req: Request, res: Response) => {
+  const { user_id } = req.params;
+
+  try {
+    const query = `
+      SELECT 
+        r.id AS recipe_id, 
+        r.title, 
+        r.instructions, 
+        r.image_url,
+        json_agg(
+          json_build_object(
+            'ingredient_id', ri.ingredient_id,
+            'name', ing.name,
+            'required_quantity', ri.required_quantity,
+            'unit', ing.unit_default,
+            'user_has_quantity', COALESCE(inv.current_quantity, 0) -- Si no tiene, es 0
+          )
+        ) as ingredients
+      FROM recipes r
+      JOIN recipe_ingredients ri ON r.id = ri.recipe_id
+      JOIN ingredients ing ON ri.ingredient_id = ing.id
+      -- Aquí cruzamos con el inventario del usuario específico
+      LEFT JOIN inventory inv ON inv.ingredient_id = ri.ingredient_id AND inv.user_id = $1
+      GROUP BY r.id
+      ORDER BY r.id ASC;
+    `;
+
+    const result = await pool.query(query, [user_id]);
+    const allRecipes = result.rows;
+
+    const perfectMatch: any[] = [];
+    const partialMatch: any[] = [];
+
+    allRecipes.forEach(recipe => {
+      let canCookPerfectly = true;
+      const missingIngredients: any[] = [];
+
+      
+      recipe.ingredients.forEach((ing: any) => {
+        if (Number(ing.user_has_quantity) < Number(ing.required_quantity)) {
+          canCookPerfectly = false;
+          missingIngredients.push({
+            ingredient_id: ing.ingredient_id,
+            name: ing.name,
+            missing_quantity: Number(ing.required_quantity) - Number(ing.user_has_quantity),
+            unit: ing.unit
+          });
+        }
+      });
+
+      if (canCookPerfectly) {
+        perfectMatch.push(recipe);
+      } else {
+        partialMatch.push({
+          ...recipe,
+          missing_ingredients: missingIngredients
+        });
+      }
+    });
+    res.json({
+      perfectMatch,
+      partialMatch
+    });
+
+  } catch (error) {
+    console.error('Error al calcular el match de recetas:', error);
+    res.status(500).json({ error: 'Error al procesar la solicitud' });
+  }
+};
