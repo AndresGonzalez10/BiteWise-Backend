@@ -3,7 +3,7 @@ import { getInventory, addInventoryItem } from '../controllers/inventoryControll
 
 const router = Router();
 
-router.get('/', getInventory);
+router.get('/:user_id', getInventory);
 router.post('/', addInventoryItem);
 
 export default router;

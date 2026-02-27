@@ -1,13 +1,28 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 
-export const getInventory = async (_req: Request, res: Response) => {
+export const getInventory = async (req: Request, res: Response) => {
+  const { user_id } = req.params; 
+
   try {
-    const query = 'SELECT * FROM ingredients';
-    const result = await pool.query(query);
+    const query = `
+      SELECT 
+        inv.id AS inventory_record_id,
+        ing.id AS ingredient_id,
+        ing.name,
+        ing.category,
+        inv.current_quantity,
+        ing.unit_default
+      FROM inventory inv
+      JOIN ingredients ing ON inv.ingredient_id = ing.id
+      WHERE inv.user_id = $1
+      ORDER BY ing.name ASC;
+    `;
+    
+    const result = await pool.query(query, [user_id]);
     res.json(result.rows);
   } catch (error) {
-    console.error('Error al obtener los ingredientes:', error);
+    console.error('Error al obtener el inventario:', error);
     res.status(500).json({ error: 'Error en el servidor' });
   }
 };
