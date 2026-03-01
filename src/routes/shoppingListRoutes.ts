@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { generateListFromRecipe } from '../controllers/shoppingListController';
+import { generateListFromRecipe,getShoppingList } from '../controllers/shoppingListController';
 
 const router = Router();
 
-// Ruta para generar lista a partir de receta
 router.post('/generate', generateListFromRecipe);
+router.get('/:list_id', getShoppingList);
 
 export default router;

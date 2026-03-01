@@ -13,12 +13,10 @@ export const generateListFromRecipe = async (req: Request<{}, {}, GenerateListBo
   try {
     await client.query('BEGIN');
 
-    // 1. Obtenemos el nombre de la receta para titular la lista
     const recipeRes = await client.query('SELECT title FROM recipes WHERE id = $1', [recipe_id]);
     if (recipeRes.rowCount === 0) throw new Error('Receta no encontrada');
     const recipeTitle = recipeRes.rows[0].title;
 
-    // 2. Calculamos EXACTAMENTE qué le falta al usuario (Receta - Inventario)
     const missingQuery = `
       SELECT 
         ri.ingredient_id, 
@@ -32,30 +30,25 @@ export const generateListFromRecipe = async (req: Request<{}, {}, GenerateListBo
     `;
     const { rows: missingItems } = await client.query(missingQuery, [user_id, recipe_id]);
 
-    // Si el arreglo viene vacío, significa que ya tiene todo
     if (missingItems.length === 0) {
       throw new Error('¡Ya tienes todos los ingredientes para esta receta!');
     }
 
-    // 3. Creamos la "cabecera" de la lista de compras
     const listName = `Faltantes para: ${recipeTitle}`;
     const listQuery = `INSERT INTO shopping_lists (user_id, name) VALUES ($1, $2) RETURNING id`;
     const listRes = await client.query(listQuery, [user_id, listName]);
     const listId = listRes.rows[0].id;
 
-    // 4. Insertamos cada ingrediente faltante en los items de la lista
     const itemQuery = `
       INSERT INTO shopping_list_items (list_id, ingredient_id, target_quantity, total_price)
       VALUES ($1, $2, $3, $4)
     `;
     
     for (const item of missingItems) {
-      // Estimamos el precio multiplicando lo que falta por el precio unitario de la base de datos
       const estimatedPrice = item.unit_price * item.missing_qty; 
       await client.query(itemQuery, [listId, item.ingredient_id, item.missing_qty, estimatedPrice]);
     }
 
-    // Confirmamos la transacción
     await client.query('COMMIT');
     res.status(201).json({ 
       message: 'Lista de compras generada con éxito',
@@ -69,5 +62,46 @@ export const generateListFromRecipe = async (req: Request<{}, {}, GenerateListBo
     res.status(400).json({ error: error.message || 'Error en el servidor' });
   } finally {
     client.release();
+  }
+};
+
+export const getShoppingList = async (req: Request, res: Response) => {
+  const { list_id } = req.params;
+
+  try {
+    const listQuery = `SELECT id, name, created_at FROM shopping_lists WHERE id = $1`;
+    const listResult = await pool.query(listQuery, [list_id]);
+
+    if (listResult.rowCount === 0) {
+      res.status(404).json({ error: 'Lista de compras no encontrada' });
+      return;
+    }
+
+    const list = listResult.rows[0];
+    const itemsQuery = `
+      SELECT 
+        sli.id AS item_id,
+        ing.id AS ingredient_id,
+        ing.name AS ingredient_name,
+        sli.target_quantity AS missing_quantity,
+        ing.unit_default AS unit,
+        sli.total_price AS estimated_price
+      FROM shopping_list_items sli
+      JOIN ingredients ing ON sli.ingredient_id = ing.id
+      WHERE sli.list_id = $1
+      ORDER BY ing.name ASC;
+    `;
+    const itemsResult = await pool.query(itemsQuery, [list_id]);
+    res.json({
+      list_id: list.id,
+      list_name: list.name,
+      created_at: list.created_at,
+      total_items: itemsResult.rowCount,
+      items: itemsResult.rows
+    });
+
+  } catch (error) {
+    console.error('Error al obtener la lista de compras:', error);
+    res.status(500).json({ error: 'Error en el servidor' });
   }
 };
