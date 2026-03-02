@@ -75,19 +75,16 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-// --- ESTADÍSTICAS DEL ADMINISTRADOR ---
+
 export const getAdminStats = async (req: Request, res: Response): Promise<void> => {
   try {
-    // 1. Contar usuarios registrados (clientes)
+
     const usersQuery = await pool.query("SELECT COUNT(*) FROM users WHERE role = 'cliente'");
     const totalUsers = parseInt(usersQuery.rows[0].count);
 
-    // 2. Contar cuántas listas de compras se han generado
     const listsQuery = await pool.query("SELECT COUNT(*) FROM shopping_lists");
     const totalLists = parseInt(listsQuery.rows[0].count);
 
-    // 3. Calcular el valor monetario total de todos los ingredientes faltantes
-    // (Esto te servirá para tu hipótesis de cuánto dinero se está gestionando)
     const moneyQuery = await pool.query("SELECT SUM(total_price) FROM shopping_list_items");
     const totalMoneyManaged = moneyQuery.rows[0].sum ? parseFloat(moneyQuery.rows[0].sum) : 0;
 
