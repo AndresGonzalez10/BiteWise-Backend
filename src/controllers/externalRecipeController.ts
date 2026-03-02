@@ -1,22 +1,25 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
+interface ExternalMeal {
+  idMeal: string;
+  strMeal: string;
+  strCategory: string;
+  strArea: string;
+  strMealThumb: string;
+  strInstructions: string;
+  [key: string]: string | null; 
+}
 
-const THEMEALDB_BASE_URL = 'https://www.themealdb.com/api/json/v1/1';
+const THEMEALDB_BASE_URL = 'https://www.themealdb.com/api/json/v1';
 
-// 🌎 1. FILTRO DE REGIONES
 const ALLOWED_AREAS = ['Mexican', 'American', 'Canadian', 'Venezuelan', 'Argentinian'];
-
-// 🚫 2. LISTA NEGRA DE INGREDIENTES
 const FORBIDDEN_INGREDIENTS = [
   'saffron', 'truffle', 'goose', 'venison', 'caviar', 'kangaroo', 
   'ostrich', 'garam masala', 'five spice', 'curry powder'
 ];
 
-// 🧠 3. DICCIONARIO INTELIGENTE (Gringo a Gramos)
 const convertToGrams = (measure: string, ingredientName: string): number => {
   const lowerMeasure = measure.toLowerCase();
-  
-  // Extraemos el primer número (ej: "1 1/2 cups" sacará un aproximado)
   const match = lowerMeasure.match(/(\d+[\d\./]*)/); 
   const amount = match ? parseFloat(match[1]) : 1; 
 
@@ -24,18 +27,17 @@ const convertToGrams = (measure: string, ingredientName: string): number => {
   if (lowerMeasure.includes('g') && !lowerMeasure.includes('garlic')) return amount;
   if (lowerMeasure.includes('lb')) return amount * 453; 
   if (lowerMeasure.includes('oz')) return amount * 28;  
-  if (lowerMeasure.includes('quart')) return amount * 946; // 1 quart = ~946 ml
+  if (lowerMeasure.includes('quart')) return amount * 946;
   if (lowerMeasure.includes('cup')) return amount * 240; 
   if (lowerMeasure.includes('tbsp') || lowerMeasure.includes('tablespoon') || lowerMeasure.includes('tbs')) return amount * 15; 
   if (lowerMeasure.includes('tsp') || lowerMeasure.includes('teaspoon')) return amount * 5; 
   if (lowerMeasure.includes('clove')) return amount * 5; 
   if (lowerMeasure.includes('large') || lowerMeasure.includes('whole')) return amount * 150; 
 
-  return amount * 50; // Si no entendemos la medida, 50g por defecto
+  return amount * 50; 
 };
 
-// 🕵️‍♀️ 4. FUNCIÓN PARA DETECTAR INGREDIENTES PROHIBIDOS
-const hasForbiddenIngredients = (meal: any): boolean => {
+const hasForbiddenIngredients = (meal: ExternalMeal): boolean => {
   for (let i = 1; i <= 20; i++) {
     const ingredient = meal[`strIngredient${i}`];
     if (ingredient) {
@@ -47,8 +49,7 @@ const hasForbiddenIngredients = (meal: any): boolean => {
   return false; 
 };
 
-// 🧹 5. LIMPIADOR DE FORMATO (Adiós a los 20 campos)
-const formatRecipe = (meal: any) => {
+const formatRecipe = (meal: ExternalMeal) => {
   const ingredients = [];
 
   for (let i = 1; i <= 20; i++) {
@@ -75,17 +76,40 @@ const formatRecipe = (meal: any) => {
   };
 };
 
-// 🌉 6. EL CONTROLADOR PRINCIPAL
 export const searchExternalRecipes = async (req: Request, res: Response): Promise<void> => {
   const { query } = req.query; 
 
   if (!query) {
-    res.status(400).json({ error: 'Debes proporcionar un término de búsqueda. Ejemplo: ?query=chicken' });
+    res.status(400).json({ code: "QUERY_REQUIRED", message: 'Debes proporcionar un término de búsqueda.' });
+    return;
+  }
+
+  const apiKey = process.env.THEMEALDB_API_KEY;
+  if (!apiKey) {
+    res.status(500).json({ 
+      code: "MISSING_API_KEY", 
+      message: "Configura THEMEALDB_API_KEY en tu archivo .env" 
+    });
     return;
   }
 
   try {
-    const response = await fetch(`${THEMEALDB_BASE_URL}/search.php?s=${query}`);
+    const url = `${THEMEALDB_BASE_URL}/${apiKey}/search.php?s=${encodeURIComponent(query as string)}`;
+    const response = await fetch(url);
+    
+    if (response.status === 401) {
+      res.status(502).json({ code: "PROVIDER_UNAUTHORIZED", message: "API Key inválida o expirada" });
+      return;
+    }
+    if (response.status === 429) {
+      res.status(503).json({ code: "PROVIDER_RATE_LIMIT", message: "Límite de requests alcanzado." });
+      return;
+    }
+    if (!response.ok) {
+      res.status(502).json({ code: "PROVIDER_ERROR", message: "Proveedor respondió con error" });
+      return;
+    }
+
     const data = await response.json();
 
     if (!data.meals) {
@@ -93,21 +117,15 @@ export const searchExternalRecipes = async (req: Request, res: Response): Promis
       return;
     }
 
-    // PASO A: Filtramos por región
-    let filteredMeals = data.meals.filter((meal: any) => ALLOWED_AREAS.includes(meal.strArea));
-
-    // PASO B: Filtramos ingredientes prohibidos
-    filteredMeals = filteredMeals.filter((meal: any) => !hasForbiddenIngredients(meal));
+    let filteredMeals = data.meals.filter((meal: ExternalMeal) => ALLOWED_AREAS.includes(meal.strArea));
+    filteredMeals = filteredMeals.filter((meal: ExternalMeal) => !hasForbiddenIngredients(meal));
 
     if (filteredMeals.length === 0) {
-      res.status(404).json({ 
-        message: 'Las recetas encontradas contenían ingredientes muy difíciles de conseguir o no son de la región permitida.' 
-      });
+      res.status(404).json({ message: 'Las recetas encontradas contenían ingredientes difíciles o no son de la región permitida.' });
       return;
     }
 
-    // PASO C: Traducimos a Gramos y Limpiamos el JSON
-    const finalRecipes = filteredMeals.map((meal: any) => formatRecipe(meal));
+    const finalRecipes = filteredMeals.map((meal: ExternalMeal) => formatRecipe(meal));
 
     res.json({
       message: 'Recetas listas para BiteWise',
@@ -117,63 +135,9 @@ export const searchExternalRecipes = async (req: Request, res: Response): Promis
 
   } catch (error) {
     console.error('Error al consultar TheMealDB:', error);
-    res.status(500).json({ error: 'Error al conectar con la API externa' });
+    res.status(502).json({ code: "NETWORK_ERROR", message: "No se pudo contactar al proveedor" });
   }
 };
 
 export const importExternalRecipe = async (req: Request, res: Response): Promise<void> => {
-  const { title, instructions, image_url, ingredients } = req.body;
-
-  if (!title || !instructions || !ingredients || !Array.isArray(ingredients)) {
-    res.status(400).json({ error: 'El formato de la receta es incorrecto o faltan datos.' });
-    return;
-  }
-
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN'); 
-
-
-    const recipeQuery = `
-      INSERT INTO recipes (title, instructions, image_url) 
-      VALUES ($1, $2, $3) RETURNING id
-    `;
-    const recipeResult = await client.query(recipeQuery, [title, instructions, image_url]);
-    const newRecipeId = recipeResult.rows[0].id;
-
-    for (const ing of ingredients) {
-      const { name, estimated_grams } = ing;
-      let ingredientId;
-      const checkIng = await client.query('SELECT id FROM ingredients WHERE LOWER(name) = LOWER($1)', [name]);
-
-      if (checkIng.rowCount && checkIng.rowCount > 0) {
-        ingredientId = checkIng.rows[0].id;
-      } else {
-        const insertIng = await client.query(`
-          INSERT INTO ingredients (name, category, unit_price, unit_default) 
-          VALUES ($1, 'Importado', 0.0500, 'g') RETURNING id
-        `, [name]);
-        ingredientId = insertIng.rows[0].id;
-      }
-
-      await client.query(`
-        INSERT INTO recipe_ingredients (recipe_id, ingredient_id, required_quantity) 
-        VALUES ($1, $2, $3)
-      `, [newRecipeId, ingredientId, estimated_grams]);
-    }
-
-    await client.query('COMMIT'); 
-    res.status(201).json({
-      message: '¡Receta importada exitosamente a tu base de datos local!',
-      local_recipe_id: newRecipeId
-    });
-
-  } catch (error) {
-    await client.query('ROLLBACK'); 
-    console.error('Error al importar la receta:', error);
-    res.status(500).json({ error: 'Hubo un error al guardar la receta en la base de datos' });
-  } finally {
-    client.release(); 
-  }
 };
