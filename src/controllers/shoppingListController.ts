@@ -105,3 +105,58 @@ export const getShoppingList = async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Error en el servidor' });
   }
 };
+
+export const purchaseList = async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params; 
+  const { user_id } = req.body; 
+  if (!id || !user_id) {
+    res.status(400).json({ error: 'Faltan datos: id de la lista o user_id.' });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+  
+    const itemsQuery = await client.query(
+      'SELECT ingredient_id, target_quantity FROM shopping_list_items WHERE list_id = $1',
+      [id]
+    );
+
+    const items = itemsQuery.rows;
+
+    if (items.length === 0) {
+      res.status(404).json({ message: 'La lista de compras está vacía o no existe.' });
+      return;
+    }
+
+    for (const item of items) {
+      await client.query(`
+        INSERT INTO inventory (user_id, ingredient_id, current_quantity)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, ingredient_id) 
+        DO UPDATE SET 
+          current_quantity = inventory.current_quantity + EXCLUDED.current_quantity,
+          updated_at = CURRENT_TIMESTAMP
+      `, [user_id, item.ingredient_id, item.target_quantity]);
+    }
+
+    await client.query('DELETE FROM shopping_lists WHERE id = $1', [id]);
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: '¡Compra exitosa! Tu despensa virtual ha sido actualizada.',
+      items_added: items.length
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK'); 
+    console.error('Error al procesar la compra:', error);
+    res.status(500).json({ error: 'Error al actualizar el inventario.' });
+  } finally {
+    client.release();
+  }
+};
