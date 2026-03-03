@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import pool from '../config/db';
+
 interface ExternalMeal {
   idMeal: string;
   strMeal: string;

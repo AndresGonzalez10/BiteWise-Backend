@@ -8,6 +8,7 @@ import shoppingListRoutes from './src/routes/shoppingListRoutes';
 import userRoutes from './src/routes/userRoutes';
 import { initializeAdmin } from './src/utils/initAdmin';
 import externalRecipeRoutes from './src/routes/externalRecipeRoutes';
+import ingredientRoutes from './src/routes/ingredientRoutes';
 import './src/config/db'; 
 
 dotenv.config();
@@ -23,6 +24,7 @@ app.use('/api/recipes', recipeRoutes);
 app.use('/api/shopping-lists', shoppingListRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/external-recipes', externalRecipeRoutes);
+app.use('/api/ingredients', ingredientRoutes);
 
 
 const PORT = process.env.PORT || 3001;
