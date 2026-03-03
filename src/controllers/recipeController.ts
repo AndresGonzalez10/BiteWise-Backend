@@ -194,3 +194,95 @@ export const cookRecipe = async (req: Request<{}, {}, CookRecipeBody>, res: Resp
     client.release();
   }
 };
+
+// ✏️ EDITAR RECETA (Solo el autor)
+export const updateRecipe = async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params; // ID de la receta en la URL
+  const { user_id, title, instructions, image_url, ingredients } = req.body;
+
+  if (!user_id) {
+    res.status(400).json({ error: 'Debes proporcionar el user_id para verificar que eres el autor.' });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN'); // Iniciamos la transacción segura
+
+    // 1. Verificamos que la receta exista y que el usuario sea el verdadero autor
+    const checkAuth = await client.query('SELECT id FROM recipes WHERE id = $1 AND author_id = $2', [id, user_id]);
+    
+    if (checkAuth.rowCount === 0) {
+      res.status(403).json({ error: 'No tienes permiso para editar esta receta (es global o de otro usuario), o no existe.' });
+      await client.query('ROLLBACK');
+      return;
+    }
+
+    // 2. Actualizamos los datos básicos de la receta
+    const updateQuery = `
+      UPDATE recipes 
+      SET 
+        title = COALESCE($1, title), 
+        instructions = COALESCE($2, instructions), 
+        image_url = COALESCE($3, image_url)
+      WHERE id = $4
+    `;
+    await client.query(updateQuery, [title, instructions, image_url, id]);
+
+    if (ingredients && Array.isArray(ingredients)) {
+      await client.query('DELETE FROM recipe_ingredients WHERE recipe_id = $1', [id]);
+      
+      const insertIngQuery = 'INSERT INTO recipe_ingredients (recipe_id, ingredient_id, required_quantity) VALUES ($1, $2, $3)';
+      for (const ing of ingredients) {
+        await client.query(insertIngQuery, [id, ing.ingredient_id, ing.required_quantity]);
+      }
+    }
+
+    await client.query('COMMIT'); 
+    res.json({ message: '¡Receta actualizada con éxito!' });
+
+  } catch (error) {
+    await client.query('ROLLBACK'); 
+    console.error('Error al editar la receta:', error);
+    res.status(500).json({ error: 'Error al procesar la solicitud.' });
+  } finally {
+    client.release();
+  }
+};
+export const deleteRecipe = async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { user_id } = req.body; 
+
+  if (!user_id) {
+    res.status(400).json({ error: 'Debes proporcionar el user_id para verificar que eres el autor.' });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const checkAuth = await client.query('SELECT id FROM recipes WHERE id = $1 AND author_id = $2', [id, user_id]);
+    
+    if (checkAuth.rowCount === 0) {
+      res.status(403).json({ error: 'No tienes permiso para eliminar esta receta o no existe.' });
+      await client.query('ROLLBACK');
+      return;
+    }
+    await client.query('DELETE FROM recipe_ingredients WHERE recipe_id = $1', [id]);
+
+    await client.query('DELETE FROM recipes WHERE id = $1', [id]);
+
+    await client.query('COMMIT');
+    res.json({ message: 'Receta eliminada por completo del sistema.' });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al eliminar la receta:', error);
+    res.status(500).json({ error: 'Error al procesar la solicitud.' });
+  } finally {
+    client.release();
+  }
+};
