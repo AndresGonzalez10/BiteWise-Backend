@@ -65,15 +65,21 @@ export const generateListFromRecipe = async (req: Request<{}, {}, GenerateListBo
   }
 };
 
-export const getShoppingList = async (req: Request, res: Response) => {
-  const { list_id } = req.params;
+export const getShoppingList = async (req: Request, res: Response): Promise<void> => {
+  const { list_id } = req.params; 
+  const { user_id } = req.query;  
+
+  if (!user_id) {
+    res.status(400).json({ error: 'Debes proporcionar tu user_id para verificar tu identidad.' });
+    return;
+  }
 
   try {
-    const listQuery = `SELECT id, name, created_at FROM shopping_lists WHERE id = $1`;
-    const listResult = await pool.query(listQuery, [list_id]);
+    const listQuery = `SELECT id, name, created_at FROM shopping_lists WHERE id = $1 AND user_id = $2`;
+    const listResult = await pool.query(listQuery, [list_id, user_id]);
 
     if (listResult.rowCount === 0) {
-      res.status(404).json({ error: 'Lista de compras no encontrada' });
+      res.status(404).json({ error: 'La lista de compras no existe o no tienes permiso para verla.' });
       return;
     }
 
@@ -92,6 +98,7 @@ export const getShoppingList = async (req: Request, res: Response) => {
       ORDER BY ing.name ASC;
     `;
     const itemsResult = await pool.query(itemsQuery, [list_id]);
+    
     res.json({
       list_id: list.id,
       list_name: list.name,
@@ -119,7 +126,6 @@ export const purchaseList = async (req: Request, res: Response): Promise<void> =
   try {
     await client.query('BEGIN');
 
-  
     const itemsQuery = await client.query(
       'SELECT ingredient_id, target_quantity FROM shopping_list_items WHERE list_id = $1',
       [id]
@@ -129,6 +135,7 @@ export const purchaseList = async (req: Request, res: Response): Promise<void> =
 
     if (items.length === 0) {
       res.status(404).json({ message: 'La lista de compras está vacía o no existe.' });
+      await client.query('ROLLBACK');
       return;
     }
 
@@ -143,12 +150,10 @@ export const purchaseList = async (req: Request, res: Response): Promise<void> =
       `, [user_id, item.ingredient_id, item.target_quantity]);
     }
 
-    await client.query('DELETE FROM shopping_lists WHERE id = $1', [id]);
-
     await client.query('COMMIT');
 
     res.json({
-      message: '¡Compra exitosa! Tu despensa virtual ha sido actualizada.',
+      message: '¡Compra exitosa! Tu despensa virtual ha sido actualizada. La lista se ha conservado.',
       items_added: items.length
     });
 
@@ -156,6 +161,103 @@ export const purchaseList = async (req: Request, res: Response): Promise<void> =
     await client.query('ROLLBACK'); 
     console.error('Error al procesar la compra:', error);
     res.status(500).json({ error: 'Error al actualizar el inventario.' });
+  } finally {
+    client.release();
+  }
+};
+// 🗑️ ELIMINAR LISTA DE COMPRAS (Solo el dueño)
+export const deleteShoppingList = async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { user_id } = req.body; 
+
+  if (!user_id) {
+    res.status(400).json({ error: 'Debes proporcionar tu user_id para verificar tu identidad.' });
+    return;
+  }
+
+  try {
+    // 🛡️ El candado: Borra solo si el ID de la lista y el ID del usuario coinciden
+    // Nota: Como tu tabla shopping_list_items tiene "ON DELETE CASCADE", 
+    // al borrar la lista se borrarán automáticamente todos los ingredientes que tenía adentro.
+    const query = 'DELETE FROM shopping_lists WHERE id = $1 AND user_id = $2 RETURNING id';
+    const result = await pool.query(query, [id, user_id]);
+
+    if (result.rowCount === 0) {
+      res.status(403).json({ error: 'No tienes permiso para eliminar esta lista o no existe.' });
+      return;
+    }
+
+    res.json({ message: 'Lista de compras eliminada exitosamente.' });
+  } catch (error) {
+    console.error('Error al eliminar la lista:', error);
+    res.status(500).json({ error: 'Error al procesar la solicitud.' });
+  }
+};
+
+interface UpdateListItems {
+  ingredient_id: number;
+  target_quantity: number;
+}
+
+interface UpdateListBody {
+  user_id: string;
+  name?: string; // Opcional por si quiere cambiarle el nombre a la lista
+  items?: UpdateListItems[]; // Opcional por si quiere agregar/quitar cosas
+}
+
+// ✏️ EDITAR LISTA DE COMPRAS (Solo el dueño)
+export const updateShoppingList = async (req: Request<{ id: string }, {}, UpdateListBody>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { user_id, name, items } = req.body;
+
+  if (!user_id) {
+    res.status(400).json({ error: 'Debes proporcionar el user_id para verificar que eres el dueño.' });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 1. Verificamos que sea el dueño legítimo
+    const checkAuth = await client.query('SELECT id FROM shopping_lists WHERE id = $1 AND user_id = $2', [id, user_id]);
+    if (checkAuth.rowCount === 0) {
+      res.status(403).json({ error: 'No tienes permiso para editar esta lista o no existe.' });
+      await client.query('ROLLBACK');
+      return;
+    }
+
+    // 2. Si mandó un nombre nuevo, lo actualizamos
+    if (name) {
+      await client.query('UPDATE shopping_lists SET name = $1 WHERE id = $2', [name, id]);
+    }
+
+    // 3. Si mandó una nueva lista de ingredientes, reemplazamos los viejos
+    if (items && Array.isArray(items)) {
+      // Borramos los items anteriores
+      await client.query('DELETE FROM shopping_list_items WHERE list_id = $1', [id]);
+
+      // 🧠 MAGIA SQL: Insertamos los nuevos y multiplicamos la cantidad por el precio (unit_price) directamente en la base de datos
+      const insertItemQuery = `
+        INSERT INTO shopping_list_items (list_id, ingredient_id, target_quantity, total_price)
+        SELECT $1, $2, $3, ($3 * unit_price)
+        FROM ingredients 
+        WHERE id = $2
+      `;
+
+      for (const item of items) {
+        await client.query(insertItemQuery, [id, item.ingredient_id, item.target_quantity]);
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Lista de compras actualizada con éxito.' });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error al editar la lista:', error);
+    res.status(500).json({ error: 'Error al procesar la solicitud.' });
   } finally {
     client.release();
   }
