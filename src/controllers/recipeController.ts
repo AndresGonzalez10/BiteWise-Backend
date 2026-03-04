@@ -1,27 +1,55 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 
-export const getAllRecipes = async (_req: Request, res: Response) => {
+export const getAllRecipes = async (req: Request, res: Response) => {
+  const user_id = req.query.user_id as string;
+
   try {
-    const query = `
-      SELECT r.*, 
-             COALESCE(
-               json_agg(
-                 json_build_object(
-                   'name', ing.name, 
-                   'quantity', ri.required_quantity, 
-                   'unit', ing.unit_default
-                 )
-               ) FILTER (WHERE ing.id IS NOT NULL), '[]'
-             ) as ingredients
-      FROM recipes r
-      LEFT JOIN recipe_ingredients ri ON r.id = ri.recipe_id
-      LEFT JOIN ingredients ing ON ri.ingredient_id = ing.id
-      GROUP BY r.id
-      ORDER BY r.id ASC;
-    `;
+    let query = '';
+    let values: string[] = [];
+
+    if (user_id) {
+      query = `
+        SELECT r.*, 
+               COALESCE(
+                 json_agg(
+                   json_build_object(
+                     'name', ing.name, 
+                     'quantity', ri.required_quantity, 
+                     'unit', ing.unit_default
+                   )
+                 ) FILTER (WHERE ing.id IS NOT NULL), '[]'
+               ) as ingredients
+        FROM recipes r
+        LEFT JOIN recipe_ingredients ri ON r.id = ri.recipe_id
+        LEFT JOIN ingredients ing ON ri.ingredient_id = ing.id
+        WHERE r.is_custom = false OR r.author_id = $1 -- <--- AQUÍ ESTÁ EL CANDADO
+        GROUP BY r.id
+        ORDER BY r.id ASC;
+      `;
+      values = [user_id];
+    } else {
+      query = `
+        SELECT r.*, 
+               COALESCE(
+                 json_agg(
+                   json_build_object(
+                     'name', ing.name, 
+                     'quantity', ri.required_quantity, 
+                     'unit', ing.unit_default
+                   )
+                 ) FILTER (WHERE ing.id IS NOT NULL), '[]'
+               ) as ingredients
+        FROM recipes r
+        LEFT JOIN recipe_ingredients ri ON r.id = ri.recipe_id
+        LEFT JOIN ingredients ing ON ri.ingredient_id = ing.id
+        WHERE r.is_custom = false -- <--- SOLO RECETAS PÚBLICAS
+        GROUP BY r.id
+        ORDER BY r.id ASC;
+      `;
+    }
     
-    const result = await pool.query(query);
+    const result = await pool.query(query, values);
     res.json(result.rows);
   } catch (error) {
     console.error('Error al obtener recetas:', error);
@@ -98,18 +126,19 @@ export const getMatchingRecipes = async (req: Request, res: Response) => {
             'name', ing.name,
             'required_quantity', ri.required_quantity,
             'unit', ing.unit_default,
-            'user_has_quantity', COALESCE(inv.current_quantity, 0) -- Si no tiene, es 0
+            'user_has_quantity', COALESCE(inv.current_quantity, 0)
           )
         ) as ingredients
       FROM recipes r
       JOIN recipe_ingredients ri ON r.id = ri.recipe_id
       JOIN ingredients ing ON ri.ingredient_id = ing.id
-      -- Aquí cruzamos con el inventario del usuario específico
       LEFT JOIN inventory inv ON inv.ingredient_id = ri.ingredient_id AND inv.user_id = $1
+      WHERE r.is_custom = false OR r.author_id = $1 -- 🛡️ CANDADO DE PRIVACIDAD AÑADIDO
       GROUP BY r.id
       ORDER BY r.id ASC;
     `;
 
+    // Pasamos el user_id para que reemplace a todos los $1 en la consulta SQL
     const result = await pool.query(query, [user_id]);
     const allRecipes = result.rows;
 
@@ -120,7 +149,6 @@ export const getMatchingRecipes = async (req: Request, res: Response) => {
       let canCookPerfectly = true;
       const missingIngredients: any[] = [];
 
-      
       recipe.ingredients.forEach((ing: any) => {
         if (Number(ing.user_has_quantity) < Number(ing.required_quantity)) {
           canCookPerfectly = false;
@@ -142,6 +170,7 @@ export const getMatchingRecipes = async (req: Request, res: Response) => {
         });
       }
     });
+    
     res.json({
       perfectMatch,
       partialMatch
