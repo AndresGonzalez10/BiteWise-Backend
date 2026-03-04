@@ -165,7 +165,6 @@ export const purchaseList = async (req: Request, res: Response): Promise<void> =
     client.release();
   }
 };
-// 🗑️ ELIMINAR LISTA DE COMPRAS (Solo el dueño)
 export const deleteShoppingList = async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const { user_id } = req.body; 
@@ -176,9 +175,6 @@ export const deleteShoppingList = async (req: Request, res: Response): Promise<v
   }
 
   try {
-    // 🛡️ El candado: Borra solo si el ID de la lista y el ID del usuario coinciden
-    // Nota: Como tu tabla shopping_list_items tiene "ON DELETE CASCADE", 
-    // al borrar la lista se borrarán automáticamente todos los ingredientes que tenía adentro.
     const query = 'DELETE FROM shopping_lists WHERE id = $1 AND user_id = $2 RETURNING id';
     const result = await pool.query(query, [id, user_id]);
 
@@ -201,11 +197,11 @@ interface UpdateListItems {
 
 interface UpdateListBody {
   user_id: string;
-  name?: string; // Opcional por si quiere cambiarle el nombre a la lista
-  items?: UpdateListItems[]; // Opcional por si quiere agregar/quitar cosas
+  name?: string; 
+  items?: UpdateListItems[]; 
 }
 
-// ✏️ EDITAR LISTA DE COMPRAS (Solo el dueño)
+
 export const updateShoppingList = async (req: Request<{ id: string }, {}, UpdateListBody>, res: Response): Promise<void> => {
   const { id } = req.params;
   const { user_id, name, items } = req.body;
@@ -220,7 +216,6 @@ export const updateShoppingList = async (req: Request<{ id: string }, {}, Update
   try {
     await client.query('BEGIN');
 
-    // 1. Verificamos que sea el dueño legítimo
     const checkAuth = await client.query('SELECT id FROM shopping_lists WHERE id = $1 AND user_id = $2', [id, user_id]);
     if (checkAuth.rowCount === 0) {
       res.status(403).json({ error: 'No tienes permiso para editar esta lista o no existe.' });
@@ -228,17 +223,13 @@ export const updateShoppingList = async (req: Request<{ id: string }, {}, Update
       return;
     }
 
-    // 2. Si mandó un nombre nuevo, lo actualizamos
+
     if (name) {
       await client.query('UPDATE shopping_lists SET name = $1 WHERE id = $2', [name, id]);
     }
 
-    // 3. Si mandó una nueva lista de ingredientes, reemplazamos los viejos
     if (items && Array.isArray(items)) {
-      // Borramos los items anteriores
       await client.query('DELETE FROM shopping_list_items WHERE list_id = $1', [id]);
-
-      // 🧠 MAGIA SQL: Insertamos los nuevos y multiplicamos la cantidad por el precio (unit_price) directamente en la base de datos
       const insertItemQuery = `
         INSERT INTO shopping_list_items (list_id, ingredient_id, target_quantity, total_price)
         SELECT $1, $2, $3, ($3 * unit_price)

@@ -138,7 +138,6 @@ export const getMatchingRecipes = async (req: Request, res: Response) => {
       ORDER BY r.id ASC;
     `;
 
-    // Pasamos el user_id para que reemplace a todos los $1 en la consulta SQL
     const result = await pool.query(query, [user_id]);
     const allRecipes = result.rows;
 
@@ -224,9 +223,8 @@ export const cookRecipe = async (req: Request<{}, {}, CookRecipeBody>, res: Resp
   }
 };
 
-// ✏️ EDITAR RECETA (Solo el autor)
 export const updateRecipe = async (req: Request, res: Response): Promise<void> => {
-  const { id } = req.params; // ID de la receta en la URL
+  const { id } = req.params; 
   const { user_id, title, instructions, image_url, ingredients } = req.body;
 
   if (!user_id) {
@@ -237,9 +235,8 @@ export const updateRecipe = async (req: Request, res: Response): Promise<void> =
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN'); // Iniciamos la transacción segura
+    await client.query('BEGIN'); 
 
-    // 1. Verificamos que la receta exista y que el usuario sea el verdadero autor
     const checkAuth = await client.query('SELECT id FROM recipes WHERE id = $1 AND author_id = $2', [id, user_id]);
     
     if (checkAuth.rowCount === 0) {
@@ -247,8 +244,6 @@ export const updateRecipe = async (req: Request, res: Response): Promise<void> =
       await client.query('ROLLBACK');
       return;
     }
-
-    // 2. Actualizamos los datos básicos de la receta
     const updateQuery = `
       UPDATE recipes 
       SET 
